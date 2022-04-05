@@ -82,6 +82,20 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+// all the data required to handle alarm
+struct alarmstate {
+  int ticks;                   // ticks since last alarm went off
+  int interval;                // alarm interval
+  void (*handler)(void);       // alarm handler
+  int inhandler;               // whether the handler is being called
+  // all caller-saved registers & PC
+  uint64 epc;
+  uint64 ra;
+  uint64 t0, t1, t2, t3, t4, t5, t6;
+  uint64 a0, a1, a2, a3, a4, a5, a6, a7;
+  struct trapframe *f;
+};
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -105,4 +119,6 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  struct alarmstate alarm;     // data for alarm handling
 };

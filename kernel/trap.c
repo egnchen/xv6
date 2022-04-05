@@ -29,6 +29,16 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+// return from alarm handler - move everything back
+int
+alarmret(struct proc *p)
+{
+  memmove(p->trapframe, p->alarm.f, sizeof(struct trapframe));
+  kfree(p->alarm.f);
+  p->alarm.f = 0;
+  return 0;
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -77,8 +87,23 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    // alarm-related logic
+    p->alarm.ticks++;
+    if(p->alarm.ticks >= p->alarm.interval) {
+      p->alarm.ticks = 0;
+      // send control flow to handler & avoid re-entering handler
+      if(p->alarm.interval && !p->alarm.f) {
+        p->alarm.f = kalloc();
+        // actually we could only save caller-save registers
+        // but here is for the convenience
+        memmove(p->alarm.f, p->trapframe, sizeof(struct trapframe));
+        printf("Handler %p called\n", p->alarm.handler);
+        p->trapframe->epc = (uint64)p->alarm.handler;
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }
