@@ -49,8 +49,9 @@ usertrap(void)
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
-  if(r_scause() == 8){
+
+  switch(r_scause()) {
+  case 8:
     // system call
 
     if(p->killed)
@@ -65,12 +66,24 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
-    // ok
-  } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    break;
+  
+  case 15:  // page fault caused by write
+    // COW handling
+    uint64 va = r_stval();
+    cowcopypage(myproc()->pagetable, va);
+    break;
+
+  case 12:  // page fault caused by inst fetch
+  case 13:  // page fault caused by read
+  default:
+    if((which_dev = devintr()) != 0){
+      // ok
+    } else {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   }
 
   if(p->killed)

@@ -343,6 +343,8 @@ sfence_vma()
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // 1 -> user can access
+#define PTE_RSW1  (1 << 8)  // RSW bit 1 - for COW
+#define PTE_RSW2  (1 << 9)  // RSW bit 2 - not used
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)

@@ -23,10 +23,14 @@ struct {
   struct run *freelist;
 } kmem;
 
+static uint8 refarray[(PHYSTOP - KERNBASE) / PGSIZE];
+#define REFCNT(pa) (refarray[((uint64)(pa) - KERNBASE) / PGSIZE])
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  memset(refarray, 0, sizeof(refarray));
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -49,10 +53,16 @@ kfree(void *pa)
   struct run *r;
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-    panic("kfree");
-
+    panic("kfree: out of range");
+  
+  if(REFCNT(pa) != 1)
+    panic("kfree: ref");
+  
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
+
+  // clear reference
+  REFCNT(pa) = 0;
 
   r = (struct run*)pa;
 
@@ -76,7 +86,33 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    REFCNT(r) = 1;
+  }
   return (void*)r;
+}
+
+void
+krefadd(uint64 pa)
+{
+  if(REFCNT(pa) == __UINT8_MAX__) {
+    panic("krefadd");
+  }
+  REFCNT(pa)++;
+}
+
+void
+krefdrop(uint64 pa)
+{
+  if(REFCNT(pa) == 0) {
+    panic("krefdrop");
+  }
+  REFCNT(pa)--;
+}
+
+uint8
+kref(uint64 pa)
+{
+  return REFCNT(pa);
 }

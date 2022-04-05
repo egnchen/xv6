@@ -159,6 +159,44 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   return 0;
 }
 
+void
+cowcopypage(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa, new_pte;
+
+  if((pte = walk(pagetable, va, 0)) == 0) {
+    panic("cowcopypage: walk");
+  }
+  if((*pte & PTE_V) == 0) {
+    panic("cowcopypage: not mapped");
+  }
+  if(PTE_FLAGS(*pte) == PTE_V) {
+    panic("cowcopypage: not a leaf");
+  }
+  if(*pte & PTE_RSW1) {
+    panic("cowcopypage: not a cow page");
+  }
+
+  pa = PTE2PA(*pte);
+  if(kref(pa) > 1) {
+    // allocate a new page, copy into it
+    uint64 new_pa = kalloc();
+    if(new_pa == 0) {
+      panic("cowcopypage: kalloc");
+    }
+    memmove(new_pa, pa, PGSIZE);
+    // reduce reference counter of old page
+    krefdrop(pa);
+    new_pte = PA2PTE(new_pa) | PTE_FLAGS(*pte);
+  } else {
+    new_pte = *pte;
+  }
+  new_pte |= PTE_W;
+  new_pte &= ~PTE_RSW1;
+  *pte = new_pte;
+}
+
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
 // Optionally free the physical memory.
@@ -305,20 +343,24 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint flags;
   char *mem;
 
-  for(i = 0; i < sz; i += PGSIZE){
+  for(i = 0; i < sz; i += PGSIZE) {
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+
+    // COW: map parent's pages into child's pgtbl
+    flags &= ~PTE_W;
+    flags |= PTE_RSW1;  // COW bit
+    if(mappages(new, i, PGSIZE, pa, flags) != 0) {
       goto err;
     }
+    *pte &= ~PTE_W;
+    *pte |= PTE_RSW1;   // COW bit
+    // add reference counter
+    krefadd(pa);
   }
   return 0;
 
@@ -347,6 +389,7 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
