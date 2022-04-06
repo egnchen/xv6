@@ -71,7 +71,10 @@ usertrap(void)
   case 15:  // page fault caused by write
     // COW handling
     uint64 va = r_stval();
-    cowcopypage(myproc()->pagetable, va);
+    if(cowcopypage(myproc()->pagetable, va) < 0) {
+      // error on cow copying, kill the process
+      p->killed = 1;
+    }
     break;
 
   case 12:  // page fault caused by inst fetch
