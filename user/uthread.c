@@ -10,11 +10,20 @@
 #define STACK_SIZE  8192
 #define MAX_THREAD  4
 
+struct utrapframe {
+  uint64 sp;
+  uint64 ra;
+  // all callee-save registers
+  uint64 s0, s1, s2, s3, s4, s5,
+         s6, s7, s8, s9, s10, s11;
+};
 
 struct thread {
+  struct utrapframe frame;      /* trapframe */
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
 };
+
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
 extern void thread_switch(uint64, uint64);
@@ -58,12 +67,10 @@ thread_schedule(void)
     next_thread->state = RUNNING;
     t = current_thread;
     current_thread = next_thread;
-    /* YOUR CODE HERE
-     * Invoke thread_switch to switch from t to next_thread:
-     * thread_switch(??, ??);
-     */
-  } else
+    thread_switch((uint64)next_thread, (uint64)t);
+  } else {
     next_thread = 0;
+  }
 }
 
 void 
@@ -75,7 +82,10 @@ thread_create(void (*func)())
     if (t->state == FREE) break;
   }
   t->state = RUNNABLE;
-  // YOUR CODE HERE
+  // initialize the trapframe so that we may jump there
+  memset((void *)&t->frame, 0, sizeof(struct utrapframe));
+  t->frame.ra = (uint64)func;
+  t->frame.sp =  (uint64)(t->stack + STACK_SIZE);
 }
 
 void 
