@@ -60,8 +60,9 @@ freerange(int cpuid, void *pa_start, void *pa_end)
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
   acquire(&kmem.locks[cpuid]);
-  for(; p + PGSIZE < (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE < (char*)pa_end; p += PGSIZE) {
     kfree_locked(cpuid, p);
+  }
   release(&kmem.locks[cpuid]);
 }
 
@@ -122,7 +123,7 @@ kalloc(void)
       r = kmem.freelist[id];
     }
     if(!r) {
-      printf("%d: no mem available\n", id);
+      // printf("%d: no mem available\n", id);
       goto end;
     }
   }
