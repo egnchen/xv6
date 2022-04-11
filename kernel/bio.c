@@ -23,7 +23,7 @@
 #include "fs.h"
 #include "buf.h"
 
-#define NBUCKET 17
+#define NBUCKET 13
 
 struct {
   struct spinlock lock;
@@ -36,7 +36,7 @@ struct {
   struct spinlock htlock[NBUCKET];
 } bcache;
 
-inline static uint
+static inline uint
 bkey(uint dev, uint blockno)
 {
   return ((dev + 1) * blockno) % NBUCKET;
@@ -48,6 +48,13 @@ get_fl_len()
   int ret = 0;
   for(struct buf *b = bcache.fhead.prev; b != &bcache.fhead; b = b->prev) {
     ret++;
+  }
+  int ret2 = 0;
+  for(struct buf *b = bcache.fhead.next; b != &bcache.fhead; b = b->next) {
+    ret2++;
+  }
+  if(ret != ret2) {
+    panic("get len");
   }
   return ret;
 }
@@ -77,7 +84,7 @@ binit(void)
 {
   struct buf *b;
 
-  initlock(&bcache.lock, "bcache");
+  initlock(&bcache.lock, "bcache.flist");
   // Create linked list of buffers
   bcache.fhead.next = &bcache.fhead;
   bcache.fhead.prev = &bcache.fhead;
@@ -101,7 +108,7 @@ binit(void)
 // Look through buffer cache for block on device dev.
 // If not found, allocate a buffer.
 // In either case, return locked buffer.
-static struct buf*
+struct buf*
 bget(uint dev, uint blockno)
 {
   struct buf *b;
@@ -126,7 +133,6 @@ bget(uint dev, uint blockno)
 
   // we need a new one from free list
   acquire(&bcache.lock);
-  // uint llen = get_fl_len();
   b = bcache.fhead.prev;
   if(b == &bcache.fhead) {
     print_bcache();
@@ -134,7 +140,6 @@ bget(uint dev, uint blockno)
   }
   b->next->prev = b->prev;
   b->prev->next = b->next;
-  // printf("bget: len %d->%d\n", llen, get_fl_len());
   release(&bcache.lock);
   b->next = b->prev = 0;
 
@@ -210,19 +215,22 @@ brelse(struct buf *b)
         panic("brelse: buf already freed");
       }
     }
+    release(&bcache.htlock[key]);
     b->hnext = 0;
-
     // add it back to free list
-    acquire(&bcache.lock);
-    // uint llen = get_fl_len();
-    b->next = bcache.fhead.next;
-    b->prev = &bcache.fhead;
-    bcache.fhead.next->prev = b;
-    bcache.fhead.next = b;
-    // printf("brelse: len %d->%d\n", llen, get_fl_len());
-    release(&bcache.lock);
+    {
+      struct buf *next;
+      acquire(&bcache.lock);
+      next = bcache.fhead.next;
+      bcache.fhead.next->prev = b;
+      bcache.fhead.next = b;
+      release(&bcache.lock);
+      b->next = next;
+      b->prev = &bcache.fhead;
+    }
+  } else {
+    release(&bcache.htlock[key]);
   }
-  release(&bcache.htlock[key]);
 
   releasesleep(&b->lock);
 }
