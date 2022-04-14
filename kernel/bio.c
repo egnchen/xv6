@@ -23,7 +23,7 @@
 #include "fs.h"
 #include "buf.h"
 
-#define NBUCKET 13
+#define NBUCKET 7
 
 struct {
   struct spinlock lock;
@@ -42,21 +42,36 @@ bkey(uint dev, uint blockno)
   return ((dev + 1) * blockno) % NBUCKET;
 }
 
-static inline uint
-get_fl_len()
+static inline struct buf*
+pop_lru_buf()
 {
-  int ret = 0;
-  for(struct buf *b = bcache.fhead.prev; b != &bcache.fhead; b = b->prev) {
-    ret++;
+  struct buf *b;
+  acquire(&bcache.lock);
+  b = bcache.fhead.prev;
+  if(b == &bcache.fhead) {
+    panic("No free buf");
   }
-  int ret2 = 0;
-  for(struct buf *b = bcache.fhead.next; b != &bcache.fhead; b = b->next) {
-    ret2++;
+  b->next->prev = b->prev;
+  b->prev->next = b->next;
+  release(&bcache.lock);
+  b->prev = b->next = 0;
+  return b;
+}
+
+static inline void
+insert_mru_buf(struct buf *b)
+{
+  struct buf *next;
+  if(b->refcnt > 0) {
+    panic("buf not free");
   }
-  if(ret != ret2) {
-    panic("get len");
-  }
-  return ret;
+  acquire(&bcache.lock);
+  next = bcache.fhead.next;
+  bcache.fhead.next = b;
+  b->prev = &bcache.fhead;
+  next->prev = b;
+  b->next = next;
+  release(&bcache.lock);
 }
 
 void
@@ -118,12 +133,11 @@ bget(uint dev, uint blockno)
   acquire(&bcache.htlock[key]); 
 
   // is the block already cached?
+  // if it is, return directly
   for(b = bcache.htable[key]; b; b = b->hnext) {
     if(b->dev == dev && b->blockno == blockno)
       break;
   }
-
-  // if it is, return directly
   if(b) {
     b->refcnt++;
     goto ok;
@@ -131,22 +145,8 @@ bget(uint dev, uint blockno)
 
   // we **don't** drop htable lock here
 
-  // we need a new one from free list
-  acquire(&bcache.lock);
-  b = bcache.fhead.prev;
-  if(b == &bcache.fhead) {
-    print_bcache();
-    panic("bget: no free buf");
-  }
-  b->next->prev = b->prev;
-  b->prev->next = b->next;
-  release(&bcache.lock);
-  b->next = b->prev = 0;
-
-  // update metadata & drop into htable
-  if(b->refcnt != 0) {
-    panic("bget: not free");
-  }
+  // fetch new one & add it to hash table
+  b = pop_lru_buf();
   b->dev = dev;
   b->blockno = blockno;
   b->refcnt = 1;
@@ -193,7 +193,6 @@ brelse(struct buf *b)
   if(!holdingsleep(&b->lock))
     panic("brelse");
 
-  // printf("%d brelse (%d,%d,%d) -> %p\n", cpuid(), b->dev, b->blockno, b->refcnt, b);
   acquire(&bcache.htlock[key]);
   b->refcnt--;
   if(b->refcnt == 0) {
@@ -218,20 +217,10 @@ brelse(struct buf *b)
     release(&bcache.htlock[key]);
     b->hnext = 0;
     // add it back to free list
-    {
-      struct buf *next;
-      acquire(&bcache.lock);
-      next = bcache.fhead.next;
-      bcache.fhead.next->prev = b;
-      bcache.fhead.next = b;
-      release(&bcache.lock);
-      b->next = next;
-      b->prev = &bcache.fhead;
-    }
+    insert_mru_buf(b);
   } else {
     release(&bcache.htlock[key]);
   }
-
   releasesleep(&b->lock);
 }
 
