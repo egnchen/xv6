@@ -6,4 +6,5 @@
 # LAB=cow
 # LAB=thread
 # LAB=net
-LAB=lock
+# LAB=lock
+LAB=mmap

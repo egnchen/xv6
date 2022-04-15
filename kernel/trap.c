@@ -47,6 +47,7 @@ void
 usertrap(void)
 {
   int which_dev = 0;
+  int cause;
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
@@ -60,7 +61,7 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
 
-  switch(r_scause()) {
+  switch((cause = r_scause())) {
   case 8:
     // system call
 
@@ -77,7 +78,15 @@ usertrap(void)
 
     syscall();
     break;
-  
+  // TODO handle COW & mmap
+  case 12:  // instruction page fault
+  case 13:  // load page fault
+  case 15:  // store/AMO page fault
+    if(handle_mmap(p, cause, r_stval()) < 0) {
+      printf("handle_mmap failed\n");
+      p->killed = 1;
+    }
+    break;
   case 15:  // page fault caused by write
     // COW handling
     uint64 va = r_stval();
@@ -87,13 +96,11 @@ usertrap(void)
     }
     break;
 
-  case 12:  // page fault caused by inst fetch
-  case 13:  // page fault caused by read
   default:
     if((which_dev = devintr()) != 0){
       // ok
     } else {
-      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("usertrap(): unexpected scause %p pid=%d\n", cause, p->pid);
       printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
       p->killed = 1;
     }

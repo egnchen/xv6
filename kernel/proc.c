@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -25,6 +29,8 @@ extern char trampoline[]; // trampoline.S
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
+
+struct vma_region vma_list[VMA_REGION_COUNT];
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -51,9 +57,74 @@ procinit(void)
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
-      initlock(&p->lock, "proc");
-      p->kstack = KSTACK((int) (p - proc));
+    initlock(&p->lock, "proc");
+    p->kstack = KSTACK((int) (p - proc));
   }
+  for(int i = 0; i < VMA_REGION_COUNT; i++) {
+    initlock(&vma_list[i].lock, "vma");
+    vma_list[i].next = 0;
+  }
+}
+
+// Allocate a vma region object
+// return with lock held
+struct vma_region*
+vma_alloc()
+{
+  for(int i = 0; i < VMA_REGION_COUNT; i++) {
+    acquire(&vma_list[i].lock);
+    if(vma_list[i].addr == 0) {
+      return &vma_list[i]; 
+    } else {
+      release(&vma_list[i].lock);
+    }
+  }
+  // no availble vma region
+  return 0;
+}
+
+// add vma to proc
+// should be called with vma lock held
+void
+vma_add(struct proc *p, struct vma_region *vma)
+{
+  vma->next = p->vma;
+  p->vma = vma;
+}
+
+// remove the vma from proc
+// this function should be called with vma lock held
+// and return lock released
+void
+vma_remove(struct proc *p, struct vma_region *vma)
+{
+  struct vma_region *prev;
+  struct file *f;
+  if(!vma) {
+    panic("vma_remove: vma");
+  }
+  if(!holding(&vma->lock)) {
+    panic("vma_remove: lock");
+  }
+  if(!p->vma) {
+    panic("vma_remove: list empty");
+  }
+  if(p->vma == vma) {
+    p->vma = p->vma->next;
+  } else {
+    for(prev = p->vma; prev && prev->next != vma; prev = prev->next) ;
+    if(prev && prev->next == vma) {
+      prev->next = vma->next;
+    } else {
+      panic("vma_remove: not found");
+    }
+  }
+  vma->next = 0;
+  vma->addr = 0;
+  f = vma->f;
+  vma->f = 0;
+  release(&vma->lock);
+  fileclose(f);
 }
 
 // Must be called with interrupts disabled,
@@ -181,6 +252,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->vma = 0;
   if(p->alarm.f) {
     kfree(p->alarm.f);
   }
@@ -321,6 +393,23 @@ fork(void)
   }
   np->sz = p->sz;
 
+  // copy vma regions
+  struct vma_region **vp = &p->vma;
+  struct vma_region **vnp = &np->vma;
+  while(*vp) {
+    struct vma_region *nvma = vma_alloc();
+    nvma->addr = (*vp)->addr;
+    nvma->length = (*vp)->length;
+    nvma->flags = (*vp)->flags;
+    nvma->prot = (*vp)->prot;
+    nvma->offset = (*vp)->offset;
+    nvma->f = filedup((*vp)->f);
+    *vnp = nvma;
+    vnp = &(*vnp)->next;
+    release(&nvma->lock);
+    vp = &(*vp)->next;
+  }
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -378,6 +467,11 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // remove all mmaped-regions
+  while(p->vma) {
+    munmap(p, p->vma->addr, p->vma->length);
+  }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){

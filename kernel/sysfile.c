@@ -16,25 +16,6 @@
 #include "file.h"
 #include "fcntl.h"
 
-// Fetch the nth word-sized system call argument as a file descriptor
-// and return both the descriptor and the corresponding struct file.
-static int
-argfd(int n, int *pfd, struct file **pf)
-{
-  int fd;
-  struct file *f;
-
-  if(argint(n, &fd) < 0)
-    return -1;
-  if(fd < 0 || fd >= NOFILE || (f=myproc()->ofile[fd]) == 0)
-    return -1;
-  if(pfd)
-    *pfd = fd;
-  if(pf)
-    *pf = f;
-  return 0;
-}
-
 // Allocate a file descriptor for the given file.
 // Takes over file reference from caller on success.
 static int

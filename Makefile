@@ -187,6 +187,7 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+	$U/_mmaptest\
 	$U/_kalloctest\
 	$U/_trace\
 	$U/_sysinfotest\
@@ -198,7 +199,6 @@ UPROGS=\
 	$U/_xargs\
 
 ifeq ($(LAB),$(filter $(LAB), pgtbl lock))
-
 UPROGS += \
 	$U/_stats
 endif
