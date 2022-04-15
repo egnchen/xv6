@@ -24,10 +24,12 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
-#ifdef LAB_NET
+// traps lab
+int sigalarm(int, void (*)(void));
+int sigreturn(void);
+// net lab
 int connect(uint32, uint16, uint16);
-#endif
-#ifdef LAB_PGTBL
+// pgtbl lab
 int pgaccess(void *base, int len, void *mask);
 // usyscall region
 int ugetpid(void);

@@ -193,6 +193,7 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+	$U/_alarmtest\
 	$U/_sleep\
 	$U/_pingpong\
 	$U/_primes\
@@ -236,6 +237,11 @@ ph: notxv6/ph.c
 
 barrier: notxv6/barrier.c
 	gcc -o barrier -g -O2 $(XCFLAGS) notxv6/barrier.c -pthread
+endif
+
+ifeq ($(LAB),pgtbl)
+UPROGS += \
+	$U/_pgtbltest
 endif
 
 ifeq ($(LAB),lock)
