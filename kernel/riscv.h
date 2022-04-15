@@ -343,6 +343,12 @@ sfence_vma()
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // 1 -> user can access
+
+#define PTE_RSW1  (1 << 8)
+#define PTE_RSW2  (1 << 9)
+
+#define PTE_COW PTE_RSW1
+
 #define PTE_G (1L << 5)
 #define PTE_A (1L << 6) // access
 

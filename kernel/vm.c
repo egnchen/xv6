@@ -120,32 +120,6 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
-void
-do_vmprint(pagetable_t pgtbl, int depth)
-{
-  for(int i = 0; i < 512; i++) {
-    pte_t pte = pgtbl[i];
-    if(pte &PTE_V) {
-      for(int j = 0; j < depth; j++)
-        printf(" ..");
-      printf("%d: pte %p pa %p\n", i, pte, PTE2PA(pte));
-      if((pte & (PTE_R|PTE_W|PTE_X)) == 0) {
-        // non-leaf
-        uint64 child = PTE2PA(pte);
-        do_vmprint((pagetable_t)child, depth + 1);
-      }
-    }
-  }
-}
-
-// walk a page table and provide an informative output
-void
-vmprint(pagetable_t pgtbl)
-{
-  printf("page table %p\n", pgtbl);
-  do_vmprint(pgtbl, 1);
-}
-
 int
 vm_pgaccess(pagetable_t pgtbl, uint64 start_addr, int pg_cnt, char *ubuf)
 {
@@ -236,6 +210,79 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   return 0;
 }
 
+void
+do_vmprint(pagetable_t pgtbl, int depth)
+{
+  for(int i = 0; i < 512; i++) {
+    pte_t pte = pgtbl[i];
+    if(pte &PTE_V) {
+      for(int j = 0; j < depth; j++)
+        printf(" ..");
+      printf("%d: pte %p pa %p\n", i, pte, PTE2PA(pte));
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+        // non-leaf
+        uint64 child = PTE2PA(pte);
+        do_vmprint((pagetable_t)child, depth + 1);
+      }
+    }
+  }
+}
+
+// walk a page table and provide an informative output
+void
+vmprint(pagetable_t pgtbl)
+{
+  printf("page table %p\n", pgtbl);
+  do_vmprint(pgtbl, 1);
+}
+
+int
+cowcopypage(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa, new_pte;
+  if(va >= MAXVA) {
+    printf("cowcopypage: overflow\n");
+    return -1;
+  }
+  if((pte = walk(pagetable, va, 0)) == 0) {
+    printf("cowcopypage: walk\n");
+    return -1;
+  }
+  if((*pte & PTE_V) == 0) {
+    printf("cowcopypage: not mapped\n");
+    return -1;
+  }
+  if((*pte & PTE_COW) == 0) {
+    printf("cowcopypage: not a cow page\n");
+    return -1;
+  }
+
+  pa = PTE2PA(*pte);
+  new_pte = *pte; // default
+  if(kref(pa) > 1) {
+    // allocate a new page, copy into it
+    krefacquire();
+    if(kref(pa) > 1) {
+      void *new_pa = kalloc();
+      if(new_pa == 0) {
+        printf("cowcopypage: kalloc");
+        krefrelease();
+        return -1;
+      }
+      memmove(new_pa, (const void *)pa, PGSIZE);
+      // reduce reference counter of old page
+      krefdec(pa);
+      new_pte = PA2PTE((uint64)new_pa) | PTE_FLAGS(*pte);
+    }
+    krefrelease();
+  }
+  new_pte |= PTE_W;
+  new_pte &= ~PTE_COW;
+  *pte = new_pte;
+  return 0;
+}
+
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
 // Optionally free the physical memory.
@@ -255,9 +302,13 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-    if(do_free){
+    if(do_free) {
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      if((*pte & PTE_COW) && kref(pa) > 1) {
+        krefdec(pa);
+      } else {
+        kfree((void*)pa);
+      }
     }
     *pte = 0;
   }
@@ -380,23 +431,41 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // printf("Old one:\n");
+  // vmprint(old);
 
-  for(i = 0; i < sz; i += PGSIZE){
+  for(i = 0; i < sz; i += PGSIZE) {
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+
+    // printf("Copying mapping %p -> %p, flags %x\n", i, pa, flags);
+
+    if(flags & PTE_W) {
+      // printf("Using COW\n");
+      // COW: map parent's pages into child's pgtbl
+      flags &= ~PTE_W;
+      flags |= PTE_COW;  // COW bit
+      if(mappages(new, i, PGSIZE, pa, flags) != 0) {
+        goto err;
+      }
+      *pte = PA2PTE(pa) | flags;
+      // add reference counter
+      krefinc(pa);
+    } else {
+      // printf("Using regular sharing\n");
+      // page is not writeable, just map it
+      if(mappages(new, i, PGSIZE, pa, flags) != 0) {
+        goto err;
+      }
+      krefinc(pa);
     }
   }
+  // printf("New one:\n");
+  // vmprint(new);
   return 0;
 
  err:
@@ -424,15 +493,51 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+  pte_t *pte;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
+    if(va0 >= MAXVA) {
       return -1;
+    }
+    if((pte = walk(pagetable, va0, 0)) == 0) {
+      return -1;
+    }
+
+    pa0 = PTE2PA(*pte);
+    if(pa0 == 0) {
+      return -1;
+    }
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
+
+    if(*pte & PTE_COW) {
+      uint flags = PTE_FLAGS(*pte);
+      if(kref(pa0) > 1) {
+        // COW page
+        krefacquire();
+        if(kref(pa0) > 1) {
+          // copy page
+          void *new_pa = kalloc();
+          if(new_pa == 0) {
+            krefrelease();
+            return -1;
+          }
+          if(n < PGSIZE) {
+            // need to copy original data first
+            memmove(new_pa, (const void *)pa0, PGSIZE);
+          }
+          krefdec(pa0);
+          pa0 = (uint64)new_pa;
+        }
+        krefrelease();
+      }
+      flags |= PTE_W;
+      flags &= ~PTE_COW;
+      *pte = PA2PTE((uint64)pa0) | flags;
+    }
+
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
     len -= n;

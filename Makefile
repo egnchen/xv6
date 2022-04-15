@@ -44,7 +44,6 @@ OBJS_KCSAN += \
 	$K/kcsan.o
 endif
 
-
 ifeq ($(LAB),net)
 OBJS += \
 	$K/e1000.o \
