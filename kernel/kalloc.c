@@ -23,10 +23,21 @@ struct {
   struct run *freelist;
 } kmem;
 
+static struct spinlock reflock;
+// page refcnts
+// 32-bit integer is used here to support atomic operations
+// this is a matter of space-time tradeoff
+// since 8-bit is well enough for most cases
+static uint32 refarray[(PHYSTOP - KERNBASE) / PGSIZE];
+#define REFCNT(pa) (refarray[((uint64)(pa) - KERNBASE) / PGSIZE])
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&reflock, "kmem_reflock");
+  for(int i = 0; i < sizeof(refarray) / sizeof(uint32); i++)
+    refarray[i] = 1;
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -49,10 +60,18 @@ kfree(void *pa)
   struct run *r;
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-    panic("kfree");
-
+    panic("kfree: out of range");
+  
+  if(REFCNT(pa) != 1) {
+    printf("%p %d\n", pa, REFCNT(pa));
+    panic("kfree: ref");
+  }
+  
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
+
+  // clear reference
+  REFCNT(pa) = 0;
 
   r = (struct run*)pa;
 
@@ -76,7 +95,39 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    REFCNT(r) = 1;
+  }
   return (void*)r;
+}
+
+void
+krefacquire()
+{
+  acquire(&reflock);
+}
+
+void
+krefrelease()
+{
+  release(&reflock);
+}
+
+uint32
+krefinc(uint64 pa)
+{
+  return __sync_fetch_and_add(&REFCNT(pa), 1);
+}
+
+uint32
+krefdec(uint64 pa)
+{
+  return __sync_fetch_and_sub(&REFCNT(pa), 1);
+}
+
+uint32
+kref(uint64 pa)
+{
+  return REFCNT(pa);
 }
