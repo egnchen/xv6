@@ -1,0 +1,18 @@
+- 哪里可能有竞争条件
+
+insert里面：
+
+```c
+static void 
+insert(int key, int value, struct entry **p, struct entry *n)
+{
+  struct entry *e = malloc(sizeof(struct entry));
+  e->key = key;
+  e->value = value;
+// 这里！
+  e->next = n;
+  *p = e;
+}
+```
+
+如果有两个thread同时insert，由于e→next = n 和*p = e两条语句并不原子，可能会丢entry。

@@ -1,0 +1,34 @@
+Which registers contain arguments to functions? For example, which register holds 13 in main's call to printf?
+
+参数寄存器：a0, a1, a2...
+
+Where is the call to function f in the assembly code for main? Where is the call to g? (Hint: the compiler may inline functions.)
+
+`auipc` + `jalr`指令组合用于call libc函数。f和g都被inline了。
+
+At what address is the function printf located?
+
+`0x0000000000000628`
+
+What value is in the register ra just after the jalr to printf in main?
+
+pc值。
+
+Run the following code.
+
+```c
+	unsigned int i = 0x00646c72;
+	printf("H%x Wo%s", 57616, &i);
+```
+
+What is the output?
+
+`He110 World`
+
+In the following code, what is going to be printed after `'y='`? (note: the answer is not a specific value.) Why does this happen?
+
+```
+	printf("x=%d y=%d", 3);
+```
+
+寄存器a2的值。
