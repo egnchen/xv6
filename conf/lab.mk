@@ -1,4 +1,4 @@
-# whichever you want XD
-
-# LAB=pgtbl
-# LAB=util
+# all the labs that are included
+LAB=util
+LAB=syscall
+LAB=pgtbl
