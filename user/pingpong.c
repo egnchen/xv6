@@ -1,6 +1,8 @@
 #include "kernel/types.h"
 #include "user/user.h"
 
+// traditional version of pingpong
+// for pingpong for lab net checkout net branch
 int
 main(int argc, char *argv[])
 {

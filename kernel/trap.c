@@ -64,7 +64,7 @@ usertrap(void)
   case 8:
     // system call
 
-    if(p->killed)
+    if(lockfree_read4(&p->killed))
       exit(-1);
 
     // sepc points to the ecall instruction,
@@ -99,8 +99,9 @@ usertrap(void)
     }
   }
 
-  if(p->killed)
+  if(lockfree_read4(&p->killed))
     exit(-1);
+  
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2) {
@@ -230,7 +231,13 @@ devintr()
       uartintr();
     } else if(irq == VIRTIO0_IRQ){
       virtio_disk_intr();
-    } else if(irq){
+    }
+#ifdef LAB_NET
+    else if(irq == E1000_IRQ){
+      e1000_intr();
+    }
+#endif
+    else if(irq){
       printf("unexpected interrupt irq=%d\n", irq);
     }
 

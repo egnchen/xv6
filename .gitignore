@@ -22,3 +22,5 @@ xv6.out*
 submissions/
 ph
 barrier
+/lab-*.json
+.DS_Store
