@@ -34,6 +34,10 @@ int pgaccess(void *base, int len, void *mask);
 // usyscall region
 int ugetpid(void);
 
+// added syscall
+int trace(int);
+int sysinfo(struct sysinfo*);
+
 // ulib.c
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);

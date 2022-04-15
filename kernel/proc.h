@@ -120,6 +120,6 @@ struct proc {
   struct inode *cwd;           // Current directory
   struct usyscall *usyscall;   // USYSCALL frame
   char name[16];               // Process name (debugging)
-
+  int tracemask;               // mask for syscall tracing
   struct alarmstate alarm;     // data for alarm handling
 };
