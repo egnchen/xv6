@@ -82,6 +82,20 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+struct vma_region {
+  struct spinlock lock;
+  uint64 addr;  // should always be page-aligned
+  int length;
+  int prot;
+  int flags;
+  struct file *f;
+  int offset;
+  struct vma_region *next;
+};
+
+#define VMA_REGION_COUNT 16
+#define VMA_ADDR_START (MAXVA / 2)
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -100,6 +114,7 @@ struct proc {
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
+  struct vma_region *vma;      // vma regions for mmap
   struct trapframe *trapframe; // data page for trampoline.S
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files

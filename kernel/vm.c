@@ -4,7 +4,12 @@
 #include "elf.h"
 #include "riscv.h"
 #include "defs.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "proc.h"
+#include "fcntl.h"
 #include "fs.h"
+#include "file.h"
 
 /*
  * the kernel's page table.
@@ -431,4 +436,197 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+// lookup for vma_region in vma region list
+// return vma_region with lock held
+// or NULL if not found
+struct vma_region *
+vma_lookup(struct proc *p, uint64 addr)
+{
+  struct vma_region *vma = p->vma;
+  while(vma) {
+    acquire(&vma->lock);
+    if(addr >= vma->addr && addr <= vma->addr + vma->length) {
+      break;
+    }
+    release(&vma->lock);
+    vma = vma->next;
+  }
+  return vma;
+}
+
+int
+munmap(struct proc *p, const uint64 addr, const int length)
+{
+  struct vma_region *vma = 0;
+  // borrowed from filewrite
+  const int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+
+  // walk through the range
+  int left = max; // batching optimization
+  begin_op();
+  for(uint64 va = addr; va < addr + length; va += PGSIZE) {
+    if(!vma || va < vma->addr || va > vma->addr + vma->length) {
+      if(vma){
+        // should we release this one?
+        acquire(&vma->lock);
+        if(addr <= vma->addr && addr + length >= vma->addr + vma->length) {
+          vma_remove(p, vma);
+        }
+        release(&vma->lock);
+      }
+      vma = vma_lookup(p, addr);
+      if(!vma) {
+        printf("munmap: addr %p not found\n", addr);
+        return -1;
+      }
+      release(&vma->lock);
+      // start a new fs operation
+      end_op();
+      left = max;
+      begin_op();
+    }
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if(!pte || (*pte & PTE_V) == 0) {
+      // not mapped, nothing to do
+      continue;
+    }
+    if(vma->flags & MAP_SHARED && (*pte & PTE_D)) {
+      // dirty, write back
+      int len = PGSIZE;
+      if(va + len > vma->addr + vma->length) {
+        len = vma->addr + vma->length - addr;
+      }
+      if(len > left) {
+        // start a new fs operation
+        end_op();
+        left = max;
+        begin_op();
+      }
+      ilock(vma->f->ip);
+      writei(vma->f->ip, 1, va, va - vma->addr + vma->offset, len);
+      iunlock(vma->f->ip);
+      left -= len;
+    }
+    // unmap this page
+    uvmunmap(p->pagetable, va, 1, 1);
+  }
+  end_op();
+
+  // should we release the last one?
+  if(vma){
+    acquire(&vma->lock);
+    if(addr <= vma->addr && addr + length >= vma->addr + vma->length) {
+      vma_remove(p, vma);
+    }
+    release(&vma->lock);
+  }
+  
+  return 0;
+}
+
+uint64
+mmap(struct proc *p, uint64 addr, int length,
+      int prot, int flags, struct file *f, int offset)
+{
+  // first, get a new vma region
+  struct vma_region *vma = vma_alloc();
+  if(vma == 0) {
+    return -1;
+  }
+
+  if(addr == 0) {
+    // default address is either VMA_ADDR_START
+    // or after last one
+    addr = VMA_ADDR_START;
+    if(p->vma) {
+      addr = PGROUNDUP(p->vma->addr + p->vma->length);
+    }
+  } else {
+    // pick a nearby page boundary
+    // this behavior is same as linux
+    addr = PGROUNDUP(addr);
+  }
+  
+  if((flags & MAP_SHARED) && (prot & PROT_WRITE) && !f->writable) {
+    goto bad;
+  }
+
+  vma->addr = addr;
+  vma->length = length;
+  vma->prot = prot;
+  vma->flags = flags;
+  vma->f = filedup(f);
+  vma->offset = offset;
+
+  vma_add(p, vma);
+
+  printf("Mmaped %p(%p, %d)\n", vma, vma->addr, vma->length);
+
+  release(&vma->lock);
+  return vma->addr;
+bad:
+  release(&vma->lock);
+  return -1;
+}
+
+int
+handle_mmap(struct proc *p, uint64 scause, uint64 addr)
+{
+  struct vma_region *vma = vma_lookup(p, addr);
+  if(!vma) {
+    // given vma region not found
+    printf("handle_mmap: addr %p not found\n", addr);
+    return -1;
+  }
+
+  // read & map a page
+  uint64 pte_perm = PTE_U;
+  uint64 kpage;
+  if((scause == 12 && !(vma->prot & PROT_EXEC)) ||
+      (scause == 13 && !(vma->prot & PROT_READ)) ||
+      (scause == 15 && !(vma->prot & PROT_WRITE))) {
+    printf("error handle_mmap: scause = %d, prot = %d\n", scause, vma->prot);
+    goto bad;
+  }
+  if(vma->f == 0) {
+    panic("handle_mmap: no file");
+    goto bad;
+  }
+  // do mapping
+  kpage = (uint64)kalloc();
+  if(vma->prot & PROT_READ)
+    pte_perm |= PTE_R;
+  if(vma->prot & PROT_WRITE)
+    pte_perm |= PTE_W;
+  if(vma->prot & PROT_EXEC)
+    pte_perm |= PTE_X;
+  if(mappages(p->pagetable, PGROUNDDOWN(addr), PGSIZE, kpage, pte_perm) < 0) {
+    panic("handle_mmap: mappages");
+    goto bad;
+  }
+  // read content
+  // in user-space we're writing @ PGROUNDDOWN(addr)
+  // in kernel-space we're writing @ kpage
+  // following are all kernel pointers
+  struct inode *ip = vma->f->ip;
+  uint64 addr_start = kpage;
+  int read_offset = vma->offset + PGROUNDDOWN(addr) - vma->addr;
+  int left = PGSIZE;
+  ilock(ip);
+  for(int read_count; (read_count = readi(ip, 0, addr_start, read_offset, left)); ) {
+    addr_start += read_count;
+    read_offset += read_count;
+    left -= read_count;
+  }
+  iunlock(ip);
+  if(left) {
+    memset((void *)addr_start, 0, left);
+  }
+  release(&vma->lock);
+  return 0;
+bad:
+  release(&vma->lock);
+  return -1;
 }

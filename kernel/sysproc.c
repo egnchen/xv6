@@ -95,3 +95,46 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int length;
+  int prot;
+  int flags;
+  struct file *f;
+  int offset;
+
+  if(argaddr(0, &addr) < 0 ||
+    argint(1, &length) < 0 ||
+    argint(2, &prot) < 0 ||
+    argint(3, &flags) < 0 ||
+    argfd(4, 0, &f) < 0 ||
+    argint(5, &offset) < 0) {
+    return -1;
+  }
+
+  if(length < 0 || f == 0) {
+    return -1;
+  }
+
+  return mmap(myproc(), addr, length, prot, flags, f, offset);
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int length;
+  if(argaddr(0, &addr) < 0 ||
+    argint(1, &length) < 0) {
+    return -1;
+  }
+  if(addr & (PGSIZE - 1)) {
+    printf("munmap: addr should be page-aligned");
+    return -1;
+  }
+
+  return munmap(myproc(), addr, length);
+}
