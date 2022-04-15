@@ -23,69 +23,142 @@
 #include "fs.h"
 #include "buf.h"
 
+#define NBUCKET 7
+
 struct {
   struct spinlock lock;
   struct buf buf[NBUF];
 
-  // Linked list of all buffers, through prev/next.
-  // Sorted by how recently the buffer was used.
-  // head.next is most recent, head.prev is least.
-  struct buf head;
+  struct buf fhead;   // Linked list of free buffers
+
+  // hash table optimization
+  struct buf *htable[NBUCKET];
+  struct spinlock htlock[NBUCKET];
 } bcache;
+
+static inline uint
+bkey(uint dev, uint blockno)
+{
+  return ((dev + 1) * blockno) % NBUCKET;
+}
+
+static inline struct buf*
+pop_lru_buf()
+{
+  struct buf *b;
+  acquire(&bcache.lock);
+  b = bcache.fhead.prev;
+  if(b == &bcache.fhead) {
+    panic("No free buf");
+  }
+  b->next->prev = b->prev;
+  b->prev->next = b->next;
+  release(&bcache.lock);
+  b->prev = b->next = 0;
+  return b;
+}
+
+static inline void
+insert_mru_buf(struct buf *b)
+{
+  struct buf *next;
+  if(b->refcnt > 0) {
+    panic("buf not free");
+  }
+  acquire(&bcache.lock);
+  next = bcache.fhead.next;
+  bcache.fhead.next = b;
+  b->prev = &bcache.fhead;
+  next->prev = b;
+  b->next = next;
+  release(&bcache.lock);
+}
+
+void
+print_bcache()
+{
+  printf("hash table:\n");
+  for(int i = 0; i < NBUCKET; i++) {
+    printf("%d\t", i);
+    for(struct buf *t = bcache.htable[i]; t; t = t->hnext) {
+      printf("%d(%p) ", t->blockno, t);
+    }
+    printf("\n");
+  }
+
+  // and free list
+  printf("free list:\n");
+  for(struct buf *b = bcache.fhead.next; b != &bcache.fhead; b = b->next) {
+    printf("%d(%p) ", b->blockno, b);
+  }
+  printf("\n");
+}
 
 void
 binit(void)
 {
   struct buf *b;
 
-  initlock(&bcache.lock, "bcache");
-
+  initlock(&bcache.lock, "bcache.flist");
   // Create linked list of buffers
-  bcache.head.prev = &bcache.head;
-  bcache.head.next = &bcache.head;
+  bcache.fhead.next = &bcache.fhead;
+  bcache.fhead.prev = &bcache.fhead;
+  // all free at first
   for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
+    b->refcnt = 0;
+    b->hnext = 0;
     initsleeplock(&b->lock, "buffer");
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
+    b->next = bcache.fhead.next;
+    b->prev = &bcache.fhead;
+    bcache.fhead.next->prev = b;
+    bcache.fhead.next = b;
   }
+  for(int i = 0; i < NBUCKET; i++) {
+    bcache.htable[i] = 0;
+    initlock(&bcache.htlock[i], "bcache.bucket");
+  }
+  print_bcache();
 }
 
 // Look through buffer cache for block on device dev.
 // If not found, allocate a buffer.
 // In either case, return locked buffer.
-static struct buf*
+struct buf*
 bget(uint dev, uint blockno)
 {
   struct buf *b;
+  uint key = bkey(dev, blockno);
 
-  acquire(&bcache.lock);
+  // get bucket lock
+  acquire(&bcache.htlock[key]); 
 
-  // Is the block already cached?
-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
-    if(b->dev == dev && b->blockno == blockno){
-      b->refcnt++;
-      release(&bcache.lock);
-      acquiresleep(&b->lock);
-      return b;
-    }
+  // is the block already cached?
+  // if it is, return directly
+  for(b = bcache.htable[key]; b; b = b->hnext) {
+    if(b->dev == dev && b->blockno == blockno)
+      break;
+  }
+  if(b) {
+    b->refcnt++;
+    goto ok;
   }
 
-  // Not cached.
-  // Recycle the least recently used (LRU) unused buffer.
-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
-    if(b->refcnt == 0) {
-      b->dev = dev;
-      b->blockno = blockno;
-      b->valid = 0;
-      b->refcnt = 1;
-      release(&bcache.lock);
-      acquiresleep(&b->lock);
-      return b;
-    }
-  }
-  panic("bget: no buffers");
+  // we **don't** drop htable lock here
+
+  // fetch new one & add it to hash table
+  b = pop_lru_buf();
+  b->dev = dev;
+  b->blockno = blockno;
+  b->refcnt = 1;
+  b->valid = 0;
+  b->hnext = bcache.htable[key];
+  bcache.htable[key] = b;
+
+ok:
+  release(&bcache.htlock[key]);
+  acquiresleep(&b->lock);
+  // printf("%d bget (%d,%d) -> %p\n", cpuid(), dev, blockno, b);
+  return b;
 }
 
 // Return a locked buf with the contents of the indicated block.
@@ -116,38 +189,55 @@ bwrite(struct buf *b)
 void
 brelse(struct buf *b)
 {
+  uint key = bkey(b->dev, b->blockno);
   if(!holdingsleep(&b->lock))
     panic("brelse");
 
-  releasesleep(&b->lock);
-
-  acquire(&bcache.lock);
+  acquire(&bcache.htlock[key]);
   b->refcnt--;
-  if (b->refcnt == 0) {
-    // no one is waiting for it.
-    b->next->prev = b->prev;
-    b->prev->next = b->next;
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
+  if(b->refcnt == 0) {
+    // no longer referenced
+    // remove it from hash table
+    if(bcache.htable[key] == 0) {
+      panic("brelse: buf already freed");
+    }
+    if(bcache.htable[key] == b) {
+      bcache.htable[key] = b->hnext;
+    } else {
+      struct buf *prev;
+      for(prev = bcache.htable[key]; prev->hnext; prev = prev->hnext) {
+        if(prev->hnext == b) break;
+      }
+      if(prev->hnext) {
+        prev->hnext = b->hnext;
+      } else {
+        panic("brelse: buf already freed");
+      }
+    }
+    release(&bcache.htlock[key]);
+    b->hnext = 0;
+    // add it back to free list
+    insert_mru_buf(b);
+  } else {
+    release(&bcache.htlock[key]);
   }
-  
-  release(&bcache.lock);
+  releasesleep(&b->lock);
 }
 
 void
 bpin(struct buf *b) {
-  acquire(&bcache.lock);
+  uint key = bkey(b->dev, b->blockno);
+  acquire(&bcache.htlock[key]);
   b->refcnt++;
-  release(&bcache.lock);
+  release(&bcache.htlock[key]);
 }
 
 void
 bunpin(struct buf *b) {
-  acquire(&bcache.lock);
+  uint key = bkey(b->dev, b->blockno);
+  acquire(&bcache.htlock[key]);
   b->refcnt--;
-  release(&bcache.lock);
+  release(&bcache.htlock[key]);
 }
 
 

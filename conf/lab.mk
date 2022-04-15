@@ -5,4 +5,5 @@
 # LAB=traps
 # LAB=cow
 # LAB=thread
-LAB=net
+# LAB=net
+LAB=lock

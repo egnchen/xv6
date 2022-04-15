@@ -44,6 +44,12 @@ OBJS_KCSAN += \
 	$K/kcsan.o
 endif
 
+ifeq ($(LAB),$(filter $(LAB), lock))
+OBJS += \
+	$K/stats.o\
+	$K/sprintf.o
+endif
+
 ifeq ($(LAB),net)
 OBJS += \
 	$K/e1000.o \
@@ -181,6 +187,7 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+	$U/_kalloctest\
 	$U/_trace\
 	$U/_sysinfotest\
 	$U/_alarmtest\
@@ -191,6 +198,7 @@ UPROGS=\
 	$U/_xargs\
 
 ifeq ($(LAB),$(filter $(LAB), pgtbl lock))
+
 UPROGS += \
 	$U/_stats
 endif
