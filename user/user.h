@@ -24,6 +24,15 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+// traps lab
+int sigalarm(int, void (*)(void));
+int sigreturn(void);
+// net lab
+int connect(uint32, uint16, uint16);
+// pgtbl lab
+int pgaccess(void *base, int len, void *mask);
+// usyscall region
+int ugetpid(void);
 
 // added syscall
 int trace(int);
@@ -45,3 +54,4 @@ void free(void*);
 int atoi(const char*);
 int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
+int statistics(void*, int);

@@ -29,6 +29,16 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+// return from alarm handler - move everything back
+int
+alarmret(struct proc *p)
+{
+  memmove(p->trapframe, p->alarm.f, sizeof(struct trapframe));
+  kfree(p->alarm.f);
+  p->alarm.f = 0;
+  return 0;
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -49,8 +59,9 @@ usertrap(void)
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
-  if(r_scause() == 8){
+
+  switch(r_scause()) {
+  case 8:
     // system call
 
     if(p->killed)
@@ -65,20 +76,50 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
-    // ok
-  } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    break;
+  
+  case 15:  // page fault caused by write
+    // COW handling
+    uint64 va = r_stval();
+    if(cowcopypage(myproc()->pagetable, va) < 0) {
+      // error on cow copying, kill the process
+      p->killed = 1;
+    }
+    break;
+
+  case 12:  // page fault caused by inst fetch
+  case 13:  // page fault caused by read
+  default:
+    if((which_dev = devintr()) != 0){
+      // ok
+    } else {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   }
 
   if(p->killed)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    // alarm-related logic
+    p->alarm.ticks++;
+    if(p->alarm.ticks >= p->alarm.interval) {
+      p->alarm.ticks = 0;
+      // send control flow to handler & avoid re-entering handler
+      if(p->alarm.interval && !p->alarm.f) {
+        p->alarm.f = kalloc();
+        // actually we could only save caller-save registers
+        // but here is for the convenience
+        memmove(p->alarm.f, p->trapframe, sizeof(struct trapframe));
+        printf("Handler %p called\n", p->alarm.handler);
+        p->trapframe->epc = (uint64)p->alarm.handler;
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }

@@ -1,8 +1,8 @@
 #include "types.h"
 #include "riscv.h"
+#include "param.h"
 #include "defs.h"
 #include "date.h"
-#include "param.h"
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
@@ -47,6 +47,7 @@ sys_sbrk(void)
 
   if(argint(0, &n) < 0)
     return -1;
+  
   addr = myproc()->sz;
   if(growproc(n) < 0)
     return -1;
@@ -59,8 +60,12 @@ sys_sleep(void)
   int n;
   uint ticks0;
 
+
   if(argint(0, &n) < 0)
     return -1;
+  
+  backtrace();
+  
   acquire(&tickslock);
   ticks0 = ticks;
   while(ticks - ticks0 < n){
@@ -73,6 +78,23 @@ sys_sleep(void)
   release(&tickslock);
   return 0;
 }
+
+
+#ifdef LAB_PGTBL
+int
+sys_pgaccess(void)
+{
+  uint64 addr;
+  int cnt;
+  uint64 ubuf;
+  if(argaddr(0, &addr) < 0 ||
+      argint(1, &cnt) < 0 ||
+      argaddr(2, &ubuf) < 0) {
+    return -1;
+  }
+  return vm_pgaccess(myproc()->pagetable, addr, cnt, (char *)ubuf);
+}
+#endif
 
 uint64
 sys_kill(void)
@@ -97,7 +119,6 @@ sys_uptime(void)
   return xticks;
 }
 
-// added syscall
 uint64
 sys_trace(void)
 {
@@ -126,4 +147,32 @@ sys_sysinfo(void)
   }
 
   return 0;
+}
+
+uint64
+sys_sigalarm(void)
+{
+  int interval;
+  uint64 handler;
+  
+  if(argint(0, &interval) < 0 ||
+    argaddr(1, &handler) < 0) {
+    return -1;
+  }
+
+  if(interval < 0) {
+    return -1;
+  }
+
+  struct proc *p = myproc();
+  p->alarm.interval = interval;
+  p->alarm.handler = (void (*)(void))handler;
+
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  return alarmret(myproc());
 }

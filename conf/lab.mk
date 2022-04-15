@@ -1,3 +1,7 @@
-# change this to the lab you want
-# LAB=syscall
+# all the labs that are included
 # LAB=util
+# LAB=syscall
+# LAB=pgtbl
+# LAB=traps
+# LAB=cow
+LAB=thread

@@ -44,18 +44,6 @@ OBJS_KCSAN += \
 	$K/kcsan.o
 endif
 
-ifeq ($(LAB),pgtbl)
-OBJS += \
-	$K/vmcopyin.o
-endif
-
-ifeq ($(LAB),$(filter $(LAB), pgtbl lock))
-OBJS += \
-	$K/stats.o\
-	$K/sprintf.o
-endif
-
-
 ifeq ($(LAB),net)
 OBJS += \
 	$K/e1000.o \
@@ -195,6 +183,7 @@ UPROGS=\
 	$U/_zombie\
 	$U/_trace\
 	$U/_sysinfotest\
+	$U/_alarmtest\
 	$U/_sleep\
 	$U/_pingpong\
 	$U/_primes\
@@ -240,6 +229,11 @@ barrier: notxv6/barrier.c
 	gcc -o barrier -g -O2 $(XCFLAGS) notxv6/barrier.c -pthread
 endif
 
+ifeq ($(LAB),pgtbl)
+UPROGS += \
+	$U/_pgtbltest
+endif
+
 ifeq ($(LAB),lock)
 UPROGS += \
 	$U/_kalloctest\
@@ -250,7 +244,6 @@ ifeq ($(LAB),fs)
 UPROGS += \
 	$U/_bigfile
 endif
-
 
 ifeq ($(LAB),net)
 UPROGS += \
