@@ -72,10 +72,9 @@ usertrap(void)
   case 13:  // load page fault
   case 15:  // store/AMO page fault
     if(handle_mmap(p, cause, r_stval()) < 0) {
-      printf("mmap failed\n");
+      printf("handle_mmap failed\n");
       p->killed = 1;
     }
-    printf("handle_mmap succeeded\n");
     break;
   default:
     if((which_dev = devintr()) != 0){

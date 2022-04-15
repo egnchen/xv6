@@ -473,8 +473,9 @@ munmap(struct proc *p, const uint64 addr, const int length)
         acquire(&vma->lock);
         if(addr <= vma->addr && addr + length >= vma->addr + vma->length) {
           vma_remove(p, vma);
+        } else {
+          release(&vma->lock);
         }
-        release(&vma->lock);
       }
       vma = vma_lookup(p, addr);
       if(!vma) {
@@ -519,8 +520,9 @@ munmap(struct proc *p, const uint64 addr, const int length)
     acquire(&vma->lock);
     if(addr <= vma->addr && addr + length >= vma->addr + vma->length) {
       vma_remove(p, vma);
+    } else {
+      release(&vma->lock);
     }
-    release(&vma->lock);
   }
   
   return 0;
@@ -561,8 +563,6 @@ mmap(struct proc *p, uint64 addr, int length,
   vma->offset = offset;
 
   vma_add(p, vma);
-
-  printf("Mmaped %p(%p, %d)\n", vma, vma->addr, vma->length);
 
   release(&vma->lock);
   return vma->addr;

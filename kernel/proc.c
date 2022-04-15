@@ -94,18 +94,18 @@ vma_add(struct proc *p, struct vma_region *vma)
 
 // remove the vma from proc
 // this function should be called with vma lock held
-// and returned lock held
+// and return lock released
 void
 vma_remove(struct proc *p, struct vma_region *vma)
 {
   struct vma_region *prev;
+  struct file *f;
   if(!vma) {
     panic("vma_remove: vma");
   }
   if(!holding(&vma->lock)) {
     panic("vma_remove: lock");
   }
-  printf("Removing %p from proc %p\n", vma, p);
   if(!p->vma) {
     panic("vma_remove: list empty");
   }
@@ -121,8 +121,10 @@ vma_remove(struct proc *p, struct vma_region *vma)
   }
   vma->next = 0;
   vma->addr = 0;
-  fileclose(vma->f);
+  f = vma->f;
   vma->f = 0;
+  release(&vma->lock);
+  fileclose(f);
 }
 
 // Must be called with interrupts disabled,
@@ -359,8 +361,22 @@ fork(void)
   }
   np->sz = p->sz;
 
-  // TODO copy vma regions
-  np->vma = p->vma;
+  // copy vma regions
+  struct vma_region **vp = &p->vma;
+  struct vma_region **vnp = &np->vma;
+  while(*vp) {
+    struct vma_region *nvma = vma_alloc();
+    nvma->addr = (*vp)->addr;
+    nvma->length = (*vp)->length;
+    nvma->flags = (*vp)->flags;
+    nvma->prot = (*vp)->prot;
+    nvma->offset = (*vp)->offset;
+    nvma->f = filedup((*vp)->f);
+    *vnp = nvma;
+    vnp = &(*vnp)->next;
+    release(&nvma->lock);
+    vp = &(*vp)->next;
+  }
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -416,6 +432,11 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // remove all mmaped-regions
+  while(p->vma) {
+    munmap(p, p->vma->addr, p->vma->length);
+  }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
