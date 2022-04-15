@@ -3,4 +3,5 @@
 # LAB=syscall
 # LAB=pgtbl
 # LAB=traps
-LAB=cow
+# LAB=cow
+LAB=thread
