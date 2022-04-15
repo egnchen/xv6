@@ -249,8 +249,6 @@ UPROGS += \
 	$U/_bigfile
 endif
 
-
-
 ifeq ($(LAB),net)
 UPROGS += \
 	$U/_nettests
