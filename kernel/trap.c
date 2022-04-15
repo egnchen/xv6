@@ -29,6 +29,16 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+// return from alarm handler - move everything back
+int
+alarmret(struct proc *p)
+{
+  memmove(p->trapframe, p->alarm.f, sizeof(struct trapframe));
+  kfree(p->alarm.f);
+  p->alarm.f = 0;
+  return 0;
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -55,7 +65,7 @@ usertrap(void)
   case 8:
     // system call
 
-    if(p->killed)
+    if(lockfree_read4(&p->killed))
       exit(-1);
 
     // sepc points to the ecall instruction,
@@ -68,6 +78,7 @@ usertrap(void)
 
     syscall();
     break;
+  // TODO handle COW & mmap
   case 12:  // instruction page fault
   case 13:  // load page fault
   case 15:  // store/AMO page fault
@@ -76,6 +87,15 @@ usertrap(void)
       p->killed = 1;
     }
     break;
+  case 15:  // page fault caused by write
+    // COW handling
+    uint64 va = r_stval();
+    if(cowcopypage(myproc()->pagetable, va) < 0) {
+      // error on cow copying, kill the process
+      p->killed = 1;
+    }
+    break;
+
   default:
     if((which_dev = devintr()) != 0){
       // ok
@@ -86,12 +106,28 @@ usertrap(void)
     }
   }
 
-  if(p->killed)
+  if(lockfree_read4(&p->killed))
     exit(-1);
+  
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    // alarm-related logic
+    p->alarm.ticks++;
+    if(p->alarm.ticks >= p->alarm.interval) {
+      p->alarm.ticks = 0;
+      // send control flow to handler & avoid re-entering handler
+      if(p->alarm.interval && !p->alarm.f) {
+        p->alarm.f = kalloc();
+        // actually we could only save caller-save registers
+        // but here is for the convenience
+        memmove(p->alarm.f, p->trapframe, sizeof(struct trapframe));
+        printf("Handler %p called\n", p->alarm.handler);
+        p->trapframe->epc = (uint64)p->alarm.handler;
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }
@@ -202,7 +238,13 @@ devintr()
       uartintr();
     } else if(irq == VIRTIO0_IRQ){
       virtio_disk_intr();
-    } else if(irq){
+    }
+#ifdef LAB_NET
+    else if(irq == E1000_IRQ){
+      e1000_intr();
+    }
+#endif
+    else if(irq){
       printf("unexpected interrupt irq=%d\n", irq);
     }
 
