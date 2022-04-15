@@ -118,6 +118,7 @@ struct proc {
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
+  struct usyscall *usyscall;   // USYSCALL frame
   char name[16];               // Process name (debugging)
 
   struct alarmstate alarm;     // data for alarm handling

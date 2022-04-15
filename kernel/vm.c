@@ -120,6 +120,83 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
+void
+do_vmprint(pagetable_t pgtbl, int depth)
+{
+  for(int i = 0; i < 512; i++) {
+    pte_t pte = pgtbl[i];
+    if(pte &PTE_V) {
+      for(int j = 0; j < depth; j++)
+        printf(" ..");
+      printf("%d: pte %p pa %p\n", i, pte, PTE2PA(pte));
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+        // non-leaf
+        uint64 child = PTE2PA(pte);
+        do_vmprint((pagetable_t)child, depth + 1);
+      }
+    }
+  }
+}
+
+// walk a page table and provide an informative output
+void
+vmprint(pagetable_t pgtbl)
+{
+  printf("page table %p\n", pgtbl);
+  do_vmprint(pgtbl, 1);
+}
+
+int
+vm_pgaccess(pagetable_t pgtbl, uint64 start_addr, int pg_cnt, char *ubuf)
+{
+  if(pg_cnt > PGSIZE * 8) {
+    printf("pgaccess: pg_cnt too large\n");
+    return -1;
+  }
+  uint64 va = start_addr;
+  int byte_cnt = (pg_cnt + 7) / 8;
+  char *kbuf = kalloc();
+  memset(kbuf, 0, byte_cnt);
+  int i = 0;
+  while(pg_cnt) {
+    pte_t *ptea = walk(pgtbl, va, 0);
+    printf("Walking va %p\n", va);
+    if(!ptea) {
+      return -1;
+    }
+
+    // get end address of current page table
+    // so we can access PTEs in chunks
+    pte_t *pt_end = (pte_t *)PGROUNDDOWN((uint64)ptea) + (PGSIZE / sizeof(pte_t));
+    int start_i = i;
+    for(;i < pg_cnt && ptea + i - start_i < pt_end; i++) {
+      pte_t pte = ptea[i - start_i];
+      if((pte & PTE_V) == 0) {
+        // invalid
+        kfree(kbuf);
+        return -1;
+      }
+      // set bitmask
+      kbuf[i / 8] |= (PTE_ACCESSED(pte) << (i & 7));
+      // clear access bit
+      ptea[i - start_i] &= ~PTE_A;
+    }
+
+    int pte_cnt = pt_end - ptea;
+    if(pte_cnt >= pg_cnt) {
+      break;
+    } else {
+      pg_cnt -= pte_cnt;
+      va += pte_cnt * PGSIZE;
+    }
+  }
+
+  // copy buffer & exit
+  int ret = copyout(pgtbl, (uint64)ubuf, kbuf, byte_cnt);
+  kfree(kbuf);
+  return ret;
+}
+
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
