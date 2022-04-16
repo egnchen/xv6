@@ -82,20 +82,21 @@ usertrap(void)
   case 12:  // instruction page fault
   case 13:  // load page fault
   case 15:  // store/AMO page fault
-    if(handle_mmap(p, cause, r_stval()) < 0) {
-      printf("handle_mmap failed\n");
-      p->killed = 1;
+    int ret;
+    // mmap handling
+    if((ret = handle_mmap(p, cause, r_stval())) == 0) {
+      break;
     }
-    break;
-  case 15:  // page fault caused by write
-    // COW handling
-    uint64 va = r_stval();
-    if(cowcopypage(myproc()->pagetable, va) < 0) {
-      // error on cow copying, kill the process
-      p->killed = 1;
+    if(ret == -1) {
+      // mmap region not found, fall back to COW
+      uint64 va = r_stval();
+      if(cowcopypage(myproc()->pagetable, va) == 0) {
+        break;
+      }
     }
+    // both failed
+    p->killed = 1;
     break;
-
   default:
     if((which_dev = devintr()) != 0){
       // ok

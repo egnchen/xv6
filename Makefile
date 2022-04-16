@@ -12,6 +12,7 @@ OBJS = \
   $K/entry.o \
   $K/kalloc.o \
   $K/string.o \
+  $K/sprintf.o \
   $K/main.o \
   $K/vm.o \
   $K/proc.o \
@@ -46,8 +47,7 @@ endif
 
 ifeq ($(LAB),$(filter $(LAB), lock))
 OBJS += \
-	$K/stats.o\
-	$K/sprintf.o
+	$K/stats.o
 endif
 
 ifeq ($(LAB),net)
@@ -187,11 +187,7 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
-	$U/_mmaptest\
-	$U/_kalloctest\
 	$U/_trace\
-	$U/_sysinfotest\
-	$U/_alarmtest\
 	$U/_sleep\
 	$U/_pingpong\
 	$U/_primes\

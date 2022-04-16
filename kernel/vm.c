@@ -769,7 +769,7 @@ handle_mmap(struct proc *p, uint64 scause, uint64 addr)
   struct vma_region *vma = vma_lookup(p, addr);
   if(!vma) {
     // given vma region not found
-    printf("handle_mmap: addr %p not found\n", addr);
+    // printf("handle_mmap: addr %p not found\n", addr);
     return -1;
   }
 
@@ -820,5 +820,5 @@ handle_mmap(struct proc *p, uint64 scause, uint64 addr)
   return 0;
 bad:
   release(&vma->lock);
-  return -1;
+  return -2;
 }
