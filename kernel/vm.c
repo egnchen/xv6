@@ -657,11 +657,17 @@ munmap(struct proc *p, const uint64 addr, const int length)
 
   // walk through the range
   int left = max; // batching optimization
+
+  // the locking here is a bit obscure
+  // because we can't hold a lock while doing I/O
+  // for convenience vma_region locks are only held when they're removed
+  // this means concurrent munmap calls might be dangerous
   begin_op();
   for(uint64 va = addr; va < addr + length; va += PGSIZE) {
     if(!vma || va < vma->addr || va > vma->addr + vma->length) {
-      if(vma){
-        // should we release this one?
+      // wrong region, find another one
+      if(vma) {
+        // should we release last one?
         acquire(&vma->lock);
         if(addr <= vma->addr && addr + length >= vma->addr + vma->length) {
           vma_remove(p, vma);
@@ -731,8 +737,7 @@ mmap(struct proc *p, uint64 addr, int length,
   }
 
   if(addr == 0) {
-    // default address is either VMA_ADDR_START
-    // or after last one
+    // default address is either VMA_ADDR_START or after last vma_region
     addr = VMA_ADDR_START;
     if(p->vma) {
       addr = PGROUNDUP(p->vma->addr + p->vma->length);
@@ -801,9 +806,8 @@ handle_mmap(struct proc *p, uint64 scause, uint64 addr)
   // read content
   // in user-space we're writing @ PGROUNDDOWN(addr)
   // in kernel-space we're writing @ kpage
-  // following are all kernel pointers
   struct inode *ip = vma->f->ip;
-  uint64 addr_start = kpage;
+  uint64 addr_start = kpage;  // this is kernel pointer
   int read_offset = vma->offset + PGROUNDDOWN(addr) - vma->addr;
   int left = PGSIZE;
   ilock(ip);
